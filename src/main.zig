@@ -18,7 +18,8 @@ const ThreadPool = struct {
     const ShutdownPolicyEnum = enum { Continue, IfTasksFinished, IgnoreRemainingTasks };
     allocator: std.mem.Allocator,
     threads: std.ArrayList(std.Thread),
-    tasks: std.atomic.Queue(Task),
+    tasks: std.DoublyLinkedList(Task),
+    task_list_mtx: std.Thread.Mutex,
 
     shutdown_policy: ShutdownPolicyEnum = .Continue,
 
@@ -26,7 +27,8 @@ const ThreadPool = struct {
         return ThreadPool {
             .allocator = allocator,
             .threads = std.ArrayList(std.Thread).init(allocator),
-            .tasks = std.atomic.Queue(Task).init(),
+            .tasks = std.DoublyLinkedList(Task){},
+            .task_list_mtx = std.Thread.Mutex{},
         };
     }
 
@@ -45,10 +47,10 @@ const ThreadPool = struct {
 
     const TaskCompleteEnum = enum { FinishAllTasks, FinishCurrentTask, CeaseImmediately };
     const ThreadPoolDeinitConfig = struct {
-        finish_tasks: TaskCompleteEnum = .FinishAllTasks,
+        finish_policy: TaskCompleteEnum = .FinishAllTasks,
     };
     pub fn deinit(self: *ThreadPool, config: ThreadPoolDeinitConfig) void {
-        switch (config.finish_tasks) {
+        switch (config.finish_policy) {
             .FinishAllTasks => {
                 self.shutdown_policy = .IfTasksFinished;
                 for (self.threads.items) |*thread| {
@@ -57,12 +59,27 @@ const ThreadPool = struct {
             },
             .FinishCurrentTask => {
                 self.shutdown_policy = .IgnoreRemainingTasks;
+
+                self.task_list_mtx.lock();
+                while (self.tasks.pop()) |n| {
+                    self.allocator.destroy(n);
+                }
+                self.task_list_mtx.unlock();
+
                 for (self.threads.items) |*thread| {
                     thread.join();
                 }
+
             },
             .CeaseImmediately => {
                 self.shutdown_policy = .IgnoreRemainingTasks;
+
+                self.task_list_mtx.lock();
+                while (self.tasks.pop()) |n| {
+                    self.allocator.destroy(n);
+                }
+                self.task_list_mtx.unlock();
+                
                 for (self.threads.items) |*thread| {
                     thread.detach();
                 }
@@ -73,35 +90,60 @@ const ThreadPool = struct {
     }
 
     pub fn scheduleTask(self: *ThreadPool, task: Task) !void {
-        const QNode = std.atomic.Queue(Task).Node;
-
-        var node = try self.allocator.create(QNode);
-        node.* = QNode{
+        var node = try self.allocator.create(std.DoublyLinkedList(Task).Node);
+        node.* = std.DoublyLinkedList(Task).Node{
             .prev = undefined,
             .next = undefined,
             .data = task,
         };
 
-        self.tasks.put(node);
+        self.task_list_mtx.lock();
+        self.tasks.append(node);
+        self.task_list_mtx.unlock();
     }
 
     fn threadLoopFn(thread_pool: *ThreadPool) void {
         const threadID: u32 = std.Thread.getCurrentId();
 
         while (true) {
-            if (thread_pool.shutdown) {
-                std.debug.print("thread {} stopping\n", .{threadID});
-                return;
+            switch (thread_pool.shutdown_policy) {
+                .Continue => {},
+                .IfTasksFinished => {
+                    thread_pool.task_list_mtx.lock();
+                    const remaining_tasks = thread_pool.tasks.len;
+                    //std.debug.print("tasks remaining: {d}\n", .{remaining_tasks});
+                    thread_pool.task_list_mtx.unlock();
+                    if (remaining_tasks == 0) {
+                        break;
+                    }
+                },
+                .IgnoreRemainingTasks => break,
             }
-            //std.debug.print("thread {} looped\n", .{threadID});
-            //std.time.sleep(1 * std.time.ns_per_s);
+            std.debug.print("thread {} continuing\n", .{threadID});
+
+            thread_pool.task_list_mtx.lock();
+            var node_opt = thread_pool.tasks.popFirst();
+
+            if (node_opt) |node| {
+                // must make a copy of the task and destroy it before unlocking the mutex or if the thread is detached the memory may leak
+                var owned_task = node.data; 
+                thread_pool.allocator.destroy(node);
+                thread_pool.task_list_mtx.unlock();
+
+                owned_task.run();
+            } else {
+                thread_pool.task_list_mtx.unlock();
+                //std.debug.print("thread {} out of available tasks!\n", .{threadID});
+                break;
+            }
         }
+        
+        std.debug.print("thread {} stopping\n", .{threadID});
     }
 };
 
 fn printTest() void {
     std.time.sleep(100 * std.time.ns_per_ms);
-    std.debug.print("slept for 100ms\n", .{});
 }
 
 pub fn main() !void {
@@ -110,22 +152,10 @@ pub fn main() !void {
     var allocator = gpa.allocator();
 
     var tp = ThreadPool.init(allocator);
-    try tp.startThreads(.{.num_threads = 2});
-    for (0..5) |_| {
+    for (0..10) |_| {
         try tp.scheduleTask(Task.init(&printTest));
     }
+    try tp.startThreads(.{.num_threads = 2});
 
-    var node = tp.tasks.head;
-    while (node != null) {
-        if (node.?.prev) |p| {
-            allocator.destroy(p);
-        }
-
-        std.debug.print("Node!\n", .{});
-        node = node.?.next;
-    }
-    allocator.destroy(tp.tasks.tail.?);
-
-    //std.debug.print("tasks: {}\n", .{tp.tasks.dump()});
-    defer tp.deinit(.{});
+    tp.deinit(.{.finish_policy = .FinishAllTasks});
 }
