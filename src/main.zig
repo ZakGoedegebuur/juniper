@@ -43,16 +43,42 @@ const ThreadPool = struct {
         self.tasks.push(task);
     }
 
-    pub fn scheduleMultitask(self: *ThreadPool, semaphore: *TaskSemaphore, slice: anytype) ![]GContext(@TypeOf(slice)) {
-        _ = semaphore;
+    fn TypeOfPtrChild(comptime T: type) type {
+        const info = switch (@typeInfo(T)) {
+            .Pointer => |ptr_info| ptr_info,
+            else => @compileError("type is not slice"),
+        };
+
+        return @typeInfo(info.child).Array.child;
+    }
+
+    pub fn scheduleMultitask(self: *ThreadPool, semaphore: *TaskSemaphore, slice: anytype, func: *const fn(*Task) void) 
+    ![]GContext([]TypeOfPtrChild(@TypeOf(slice))) {
         comptime switch (@typeInfo(@TypeOf(slice))) {
             .Pointer => {},
             else => @compileError("argument 'slice' is not of type slice"),
         };
 
-        const num_tasks = if (slice.len >= self.thread_channels.items.len) slice.len / self.thread_channels.items.len else slice.len;
+        if (slice.len < 1) {
+            return &.{};
+        }
 
-        var contexts = try self.allocator.alloc(GContext(@TypeOf(slice)), num_tasks);
+        const default_task_len = if (slice.len / self.thread_channels.items.len == 0) 1 else slice.len / self.thread_channels.items.len; 
+        const num_tasks = 
+            if (slice.len >= self.thread_channels.items.len) 
+                self.thread_channels.items.len
+            else
+                slice.len; 
+
+        var contexts = try self.allocator.alloc(GContext([]TypeOfPtrChild(@TypeOf(slice))), num_tasks);
+
+        for (contexts, 0..) |*context, i| {
+            const end_val: usize = if (i == num_tasks - 1) slice.len else (i + 1) * default_task_len;
+            context.value = slice[i * default_task_len..end_val];
+            context.task = Task.init(func, semaphore);
+            self.scheduleTask(&context.task);
+        }
+
         return contexts;
     }
 
@@ -198,10 +224,17 @@ pub fn GContext(comptime T: type) type {
 }
 
 fn printContext(task: *Task) void {
-    //const ctx = @fieldParentPtr(GContext([]const u8), "task", task);
     const ctx = GContext([]const u8).ptrFromChild(task);
     std.time.sleep(1 * std.time.ns_per_s);
     std.debug.print("message: {s}\n", .{ctx.value});
+}
+
+fn printMulti(task: *Task) void {
+    std.time.sleep(1 * std.time.ns_per_s);
+    const ctx = GContext([]u32).ptrFromChild(task);
+    for (ctx.value) |num| {
+        std.debug.print("num: {d} from {d}\n", .{num, std.Thread.getCurrentId()});
+    }
 }
 
 pub fn main() !void {
@@ -210,20 +243,23 @@ pub fn main() !void {
     var allocator = gpa.allocator();
 
     var tp = ThreadPool.init(allocator);
-    try tp.startThreads(.{.num_threads = 4});
-    std.time.sleep(1000 * std.time.ns_per_ms);
+    try tp.startThreads(.{.num_threads = 3});
+    //std.time.sleep(1000 * std.time.ns_per_ms);
     {   
         var s1 = TaskSemaphore{};
         var sl = [_]u32{2312, 2313, 2314, 2315};
-        var ctxts = try tp.scheduleMultitask(&s1, sl[0..2]);
-        defer allocator.free(ctxts);
-        var msg_task = GContext([]const u8).init(printContext, "OOOOOO", &s1);
-        var msg_task2 = GContext([]const u8).init(printContext, "AAAAAA", &s1);
-        tp.scheduleTask(&msg_task.task);
-        tp.scheduleTask(&msg_task.task);
-        tp.scheduleTask(&msg_task2.task);
-        tp.scheduleTask(&msg_task.task);
-        defer s1.wait();
+        var ctxts = try tp.scheduleMultitask(&s1, sl[0..0], printMulti);
+        std.debug.print("ctxts.len = {}\n", .{ctxts.len});
+        defer {
+            s1.wait();
+            allocator.free(ctxts);
+        }
+        //var msg_task = GContext([]const u8).init(printContext, "OOOOOO", &s1);
+        //var msg_task2 = GContext([]const u8).init(printContext, "AAAAAA", &s1);
+        //tp.scheduleTask(&msg_task.task);
+        //tp.scheduleTask(&msg_task2.task);
+        //tp.scheduleTask(&msg_task.task);
+        //tp.scheduleTask(&msg_task2.task);
     }
     tp.deinit(.{.finish_policy = .FinishAllTasks});
 }
