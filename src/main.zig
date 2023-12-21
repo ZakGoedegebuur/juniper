@@ -71,9 +71,9 @@ const ThreadPool = struct {
                 },
                 .IgnoreRemainingTasks => break,
             }
-            std.time.sleep(300 * std.time.ns_per_ms);
+            //std.time.sleep(300 * std.time.ns_per_ms);
 
-            std.debug.print("thread {d} running task or continuing\n", .{thread_ID});
+            //std.debug.print("thread {d} running task or continuing\n", .{thread_ID});
             //std.debug.print("num tasks a: {d}\n", .{tp.tasks.len});
             if (tp.tasks.pop()) |task| {
                 task.run();
@@ -190,11 +190,17 @@ pub fn GContext(comptime T: type) type {
                 .value = value,
             };
         }
+
+        inline fn ptrFromChild(task_ptr: *Task) *Self {
+            return @fieldParentPtr(Self, "task", task_ptr);
+        }
     };
 }
 
 fn printContext(task: *Task) void {
-    const ctx = @fieldParentPtr(GContext([]const u8), "task", task);
+    //const ctx = @fieldParentPtr(GContext([]const u8), "task", task);
+    const ctx = GContext([]const u8).ptrFromChild(task);
+    std.time.sleep(1 * std.time.ns_per_s);
     std.debug.print("message: {s}\n", .{ctx.value});
 }
 
@@ -205,15 +211,17 @@ pub fn main() !void {
 
     var tp = ThreadPool.init(allocator);
     try tp.startThreads(.{.num_threads = 4});
+    std.time.sleep(1000 * std.time.ns_per_ms);
     {   
         var s1 = TaskSemaphore{};
         var sl = [_]u32{2312, 2313, 2314, 2315};
         var ctxts = try tp.scheduleMultitask(&s1, sl[0..2]);
         defer allocator.free(ctxts);
         var msg_task = GContext([]const u8).init(printContext, "OOOOOO", &s1);
+        var msg_task2 = GContext([]const u8).init(printContext, "AAAAAA", &s1);
         tp.scheduleTask(&msg_task.task);
         tp.scheduleTask(&msg_task.task);
-        tp.scheduleTask(&msg_task.task);
+        tp.scheduleTask(&msg_task2.task);
         tp.scheduleTask(&msg_task.task);
         defer s1.wait();
     }
