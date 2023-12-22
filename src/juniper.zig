@@ -49,11 +49,7 @@ pub const ThreadPool = struct {
     fn TypeOfChild(comptime T: type) type {
         switch (@typeInfo(T)) {
             .Pointer => |ptr_info| {
-                switch(@typeInfo(ptr_info.child)) {
-                    .Pointer => |i| return i.child,
-                    .Array => |i| return i.child,
-                    else => |i| return @Type(i),
-                }
+                return ptr_info.child;
             },
             .Array => |arr_info| return arr_info.child,
             else => @compileError("type is not pointer or array"),
