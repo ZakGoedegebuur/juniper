@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const ThreadPool = struct {
+pub const ThreadPool = struct {
     const ThreadChannel = struct { thread: std.Thread };
     const ShutdownPolicyEnum = enum { Continue, IfTasksFinished, IgnoreRemainingTasks };
     allocator: std.mem.Allocator,
@@ -62,7 +62,7 @@ const ThreadPool = struct {
         //return @typeInfo(info.child).Pointer.child;
     }
 
-    pub fn scheduleMultitask(self: *ThreadPool, allocator: std.mem.Allocator, semaphore: *TaskSemaphore, slice: anytype, func: *const fn(*Task) void) 
+    fn scheduleMultitask(self: *ThreadPool, allocator: std.mem.Allocator, semaphore: *TaskSemaphore, slice: anytype, func: *const fn(*Task) void) 
     ![]GContext([]TypeOfChild(@TypeOf(slice))) {
         comptime switch (@typeInfo(@TypeOf(slice))) {
             .Pointer => {},
@@ -136,13 +136,13 @@ const TaskQueue = struct {
     const Self = @This();
 
     /// Node inside the linked list wrapping the actual data.
-    pub const Node = Task;
+    const Node = Task;
 
     first: ?*Node = null,
     last: ?*Node = null,
     len: usize = 0,
 
-    pub fn insertAfter(list: *Self, node: *Node, new_node: *Node) void {
+    fn insertAfter(list: *Self, node: *Node, new_node: *Node) void {
         new_node.prev = node;
         if (node.next) |next_node| {
             // Intermediate node.
@@ -158,7 +158,7 @@ const TaskQueue = struct {
         list.len += 1;
     }
 
-    pub fn insertBefore(list: *Self, node: *Node, new_node: *Node) void {
+    fn insertBefore(list: *Self, node: *Node, new_node: *Node) void {
         new_node.next = node;
         if (node.prev) |prev_node| {
             // Intermediate node.
@@ -174,7 +174,7 @@ const TaskQueue = struct {
         list.len += 1;
     }
 
-    pub fn concatByMoving(list1: *Self, list2: *Self) void {
+    fn concatByMoving(list1: *Self, list2: *Self) void {
         const l2_first = list2.first orelse return;
         if (list1.last) |l1_last| {
             l1_last.next = list2.first;
@@ -191,7 +191,7 @@ const TaskQueue = struct {
         list2.len = 0;
     }
 
-    pub fn append(list: *Self, new_node: *Node) void {
+    fn append(list: *Self, new_node: *Node) void {
         if (list.last) |last| {
             // Insert after last.
             list.insertAfter(last, new_node);
@@ -201,7 +201,7 @@ const TaskQueue = struct {
         }
     }
 
-    pub fn prepend(list: *Self, new_node: *Node) void {
+    fn prepend(list: *Self, new_node: *Node) void {
         if (list.first) |first| {
             // Insert before first.
             list.insertBefore(first, new_node);
@@ -216,7 +216,7 @@ const TaskQueue = struct {
         }
     }
 
-    pub fn remove(list: *Self, node: *Node) void {
+    fn remove(list: *Self, node: *Node) void {
         if (node.prev) |prev_node| {
             // Intermediate node.
             prev_node.next = node.next;
@@ -236,33 +236,33 @@ const TaskQueue = struct {
         list.len -= 1;
     }
 
-    pub fn pop(list: *Self) ?*Node {
+    fn pop(list: *Self) ?*Node {
         const last = list.last orelse return null;
         list.remove(last);
         return last;
     }
 
-    pub fn popFirst(list: *Self) ?*Node {
+    fn popFirst(list: *Self) ?*Node {
         const first = list.first orelse return null;
         list.remove(first);
         return first;
     }
 };
 
-const TaskSemaphore = struct {
+pub const TaskSemaphore = struct {
     /// num_complete is incremented every time a task with this semaphore is completed
     num_complete: usize = 0,
     /// wait_count is incremented every time a task with this semaphore is scheduled
     wait_count: usize = 0,
     mtx: std.Thread.Mutex = std.Thread.Mutex{},
 
-    pub fn incrementWaitCount(self: *TaskSemaphore) void {
+    fn incrementWaitCount(self: *TaskSemaphore) void {
         self.mtx.lock();
         self.wait_count += 1;
         self.mtx.unlock();
     }
 
-    pub fn incrementCompletedTasks(self: *TaskSemaphore) void {
+    fn incrementCompletedTasks(self: *TaskSemaphore) void {
         self.mtx.lock();
         self.num_complete += 1;
         self.mtx.unlock();
@@ -284,7 +284,7 @@ const TaskSemaphore = struct {
     }
 };
 
-const Task = struct {
+pub const Task = struct {
     next: ?*Task = null,
     prev: ?*Task = null,
     func: *const fn (*Task) void,
@@ -323,32 +323,32 @@ pub fn GContext(comptime T: type) type {
     };
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var allocator = gpa.allocator();
-    
-    var sl = try allocator.alloc(u32, 1_000_000);
-    for (sl, 0..) |*val, i| {
-        val.* = @intCast(i);
-    }
-
-    defer allocator.free(sl);
-    var tp = ThreadPool.init(allocator);
-    try tp.startThreads(.{});
-    var timer = try std.time.Timer.start();
-
-    var s1 = TaskSemaphore{};
-    var ctx = try tp.forEachNonBlocking(allocator, &s1, sl[0..], printMulti);
-    s1.wait();
-    allocator.free(ctx);
-    
-    try tp.forEach(sl[0..], printMulti);
-
-    const time = timer.read();
-    std.debug.print("time taken: {}ms\n", .{time / std.time.ns_per_ms});
-    tp.deinit(.{.finish_policy = .FinishAllTasks});
-}
+//pub fn main() !void {
+//    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+//    defer _ = gpa.deinit();
+//    var allocator = gpa.allocator();
+//    
+//    var sl = try allocator.alloc(u32, 1_000_000);
+//    for (sl, 0..) |*val, i| {
+//        val.* = @intCast(i);
+//    }
+//
+//    defer allocator.free(sl);
+//    var tp = ThreadPool.init(allocator);
+//    try tp.startThreads(.{});
+//    var timer = try std.time.Timer.start();
+//
+//    var s1 = TaskSemaphore{};
+//    var ctx = try tp.forEachNonBlocking(allocator, &s1, sl[0..], printMulti);
+//    s1.wait();
+//    allocator.free(ctx);
+//    
+//    try tp.forEach(sl[0..], printMulti);
+//
+//    const time = timer.read();
+//    std.debug.print("time taken: {}ms\n", .{time / std.time.ns_per_ms});
+//    tp.deinit(.{.finish_policy = .FinishAllTasks});
+//}
 
 fn printMulti(task: *Task) void {
     const ctx = GContext([]u32).ptrFromChild(task);
