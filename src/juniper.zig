@@ -310,14 +310,14 @@ pub fn GContext(comptime T: type) type {
         task: Task,
         value: T,
 
-        fn init(comptime func: fn(*Task) void, value: T, semaphore: *TaskSemaphore) Self {
+        pub fn init(comptime func: fn(*Task) void, value: T, semaphore: *TaskSemaphore) Self {
             return Self {
                 .task = Task.init(func, semaphore),
                 .value = value,
             };
         }
 
-        inline fn ptrFromChild(task_ptr: *Task) *Self {
+        pub inline fn ptrFromChild(task_ptr: *Task) *Self {
             return @fieldParentPtr(Self, "task", task_ptr);
         }
     };
