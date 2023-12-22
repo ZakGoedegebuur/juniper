@@ -337,6 +337,11 @@ pub fn main() !void {
     var tp = ThreadPool.init(allocator);
     try tp.startThreads(.{});
     var timer = try std.time.Timer.start();
+
+    var s1 = TaskSemaphore{};
+    var ctx = try tp.forEachNonBlocking(allocator, &s1, sl[0..], printMulti);
+    s1.wait();
+    allocator.free(ctx);
     
     try tp.forEach(sl[0..], printMulti);
 
@@ -348,7 +353,6 @@ pub fn main() !void {
 fn printMulti(task: *Task) void {
     const ctx = GContext([]u32).ptrFromChild(task);
     for (ctx.value) |*num| {
-        //std.debug.print("num: {d} from {d}\n", .{num, std.Thread.getCurrentId()});
         for (0..1000) |i| {
             if (i % 2 == 0) {
                 num.* *= 3;
@@ -392,7 +396,6 @@ test "explicit-hardware-num-threads" {
     var tp = ThreadPool.init(allocator);
     try tp.startThreads(.{});
     
-    try tp.forEach(sl[0..], printMulti);
     var s1 = TaskSemaphore{};
     var ctx = try tp.forEachNonBlocking(allocator, &s1, sl[0..], printMulti);
     s1.wait();
