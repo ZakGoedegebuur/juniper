@@ -105,7 +105,7 @@ const ThreadPool = struct {
 
     fn threadLoopFn(tp: *ThreadPool) void {
         const thread_ID: u32 = std.Thread.getCurrentId();
-        std.debug.print("thread {d} opening\n", .{thread_ID});
+        _ = thread_ID;
 
         while (true) {
             switch (tp.shutdown_policy) {
@@ -129,8 +129,6 @@ const ThreadPool = struct {
                 task.run();
             }
         }
-
-        std.debug.print("thread {d} closing\n", .{thread_ID});
     }
 };
 
@@ -325,6 +323,28 @@ pub fn GContext(comptime T: type) type {
     };
 }
 
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var allocator = gpa.allocator();
+    
+    var sl = try allocator.alloc(u32, 1_000_000);
+    for (sl, 0..) |*val, i| {
+        val.* = @intCast(i);
+    }
+
+    defer allocator.free(sl);
+    var tp = ThreadPool.init(allocator);
+    try tp.startThreads(.{});
+    var timer = try std.time.Timer.start();
+    
+    try tp.forEach(sl[0..], printMulti);
+
+    const time = timer.read();
+    std.debug.print("time taken: {}ms\n", .{time / std.time.ns_per_ms});
+    tp.deinit(.{.finish_policy = .FinishAllTasks});
+}
+
 fn printMulti(task: *Task) void {
     const ctx = GContext([]u32).ptrFromChild(task);
     for (ctx.value) |*num| {
@@ -339,12 +359,12 @@ fn printMulti(task: *Task) void {
     }
 }
 
-pub fn main() !void {
+test "forEach-hardware-num-threads" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     var allocator = gpa.allocator();
     
-    var sl = try allocator.alloc(u32, 100_000_000);
+    var sl = try allocator.alloc(u32, 100_000);
     for (sl, 0..) |*val, i| {
         val.* = @intCast(i);
     }
@@ -352,18 +372,31 @@ pub fn main() !void {
     defer allocator.free(sl);
     var tp = ThreadPool.init(allocator);
     try tp.startThreads(.{});
-    var timer = try std.time.Timer.start();
-    {   
-        try tp.forEach(sl[0..], printMulti);
-        //var s1 = TaskSemaphore{};
-        //var ctx1 = try tp.forEachNonBlocking(allocator, &s1, sl[0..50_000_000], printMulti);
-        //var ctx2 = try tp.forEachNonBlocking(allocator, &s1, sl[50_000_000..], printMulti);
-        //s1.wait();
-        //allocator.free(ctx1);
-        //allocator.free(ctx2);
+    
+    try tp.forEach(sl[0..], printMulti);
+    
+    tp.deinit(.{.finish_policy = .FinishAllTasks});
+}
+
+test "explicit-hardware-num-threads" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var allocator = gpa.allocator();
+    
+    var sl = try allocator.alloc(u32, 100_000);
+    for (sl, 0..) |*val, i| {
+        val.* = @intCast(i);
     }
-    const time = timer.read();
-    std.debug.print("arr: {*}\n", .{sl});
-    std.debug.print("time taken: {}ms\n", .{time / std.time.ns_per_ms});
+
+    defer allocator.free(sl);
+    var tp = ThreadPool.init(allocator);
+    try tp.startThreads(.{});
+    
+    try tp.forEach(sl[0..], printMulti);
+    var s1 = TaskSemaphore{};
+    var ctx = try tp.forEachNonBlocking(allocator, &s1, sl[0..], printMulti);
+    s1.wait();
+    allocator.free(ctx);
+    
     tp.deinit(.{.finish_policy = .FinishAllTasks});
 }
